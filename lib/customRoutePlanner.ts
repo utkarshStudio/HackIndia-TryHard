@@ -1,4 +1,5 @@
 import type { Route } from "@/lib/types";
+import { seaSegment } from "@/lib/seaRoute";
 
 type PortRegion =
   | "india_west"
@@ -986,7 +987,8 @@ const SEA_NODES: GraphNode[] = [
   { id: "gibraltar", label: "Gibraltar", position: [-5.5, 36] },
   { id: "bay_biscay", label: "Bay of Biscay", position: [-5, 45] },
   { id: "north_sea", label: "North Sea approach", position: [2, 50] },
-  { id: "south_india", label: "South India coastal lane", position: [76, 8] },
+
+  { id: "south_india", label: "South India coastal lane", position: [77, 6] },
   { id: "sri_lanka_south", label: "South of Sri Lanka", position: [80, 5] },
   { id: "bay_bengal", label: "Bay of Bengal", position: [88, 7] },
   { id: "malacca_west", label: "Malacca west approach", position: [99.5, 4.5] },
@@ -1323,11 +1325,51 @@ function labelForHazards(hazardIds: string[]): string {
     .join(", ");
 }
 
+function significantNodeIds(path: string[]): Set<string> {
+  const keep = new Set<string>();
+  if (path.length > 0) {
+    keep.add(path[0]);
+    keep.add(path[path.length - 1]);
+  }
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const edge = BASE_EDGES.find(
+      (candidate) =>
+        (candidate.a === path[i] && candidate.b === path[i + 1]) ||
+        (candidate.a === path[i + 1] && candidate.b === path[i]),
+    );
+    if (edge && (edge.hazards || edge.safeOnlyFor)) {
+      keep.add(path[i]);
+      keep.add(path[i + 1]);
+    }
+  }
+  return keep;
+}
+
 function pointsForPath(path: string[]): [number, number][] {
   const { nodes } = buildGraph();
-  return path
+  // Only keep the origin/destination and nodes that anchor an actual
+  // hazard/chokepoint on this path. Plain "connector" nodes in the graph
+  // exist for pathfinding/hazard-tagging purposes, not because a ship
+  // must physically pass through that exact point — forcing geometry
+  // through them causes the sparse maritime network to take odd short-hop
+  // detours. Letting searoute route directly between the meaningful
+  // waypoints gives a cleaner, still land-avoiding result.
+  const keep = significantNodeIds(path);
+  const waypoints = path
+    .filter((id) => keep.has(id))
     .map((id) => nodes.get(id)?.position)
     .filter((point): point is [number, number] => Boolean(point));
+
+  if (waypoints.length < 2) return waypoints;
+
+  const stitched: [number, number][] = [waypoints[0]];
+  for (let i = 0; i < waypoints.length - 1; i += 1) {
+    const segment = seaSegment(waypoints[i], waypoints[i + 1]);
+    for (const point of segment.slice(1)) {
+      stitched.push(point);
+    }
+  }
+  return stitched;
 }
 
 function routeFromPoints(
